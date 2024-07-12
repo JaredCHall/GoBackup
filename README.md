@@ -1,6 +1,8 @@
 # GoBackup
 
-Utility from backing up local files. It moves them from one place to another.
+![logo.png](logo.png)
+
+Utility for backing up files. It moves them from one place to another.
 
 ## Features
 
