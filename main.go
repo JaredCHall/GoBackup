@@ -1,82 +1,10 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"os/user"
-	"path/filepath"
 )
-
-type Destination struct {
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	Encrypt  bool   `json:"encrypt"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-}
-
-type Config struct {
-	SourceDirs   []string      `json:"sourceDirs"`
-	Destinations []Destination `json:"destinations"`
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func FindConfigFilePath() (string, error) {
-	usr, err := user.Current()
-	if err != nil {
-		fmt.Println("Error fetching current user:", err)
-		return "", err
-	}
-	homeDirPath := filepath.Join(usr.HomeDir, ".gobackup", "config.json")
-	etcPath := "/etc/gobackup/config.json"
-
-	if fileExists(homeDirPath) {
-		return homeDirPath, nil
-	}
-	if fileExists(etcPath) {
-		return etcPath, nil
-	}
-	return "", errors.New("no file at " + homeDirPath + " or " + etcPath)
-}
-
-func ReadConfig(filename string) (Config, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return Config{}, err
-	}
-	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			fmt.Printf("Error closing file: %v\n", err)
-		}
-	}(file)
-
-	var config Config
-	decoder := json.NewDecoder(bufio.NewReader(file))
-	if err := decoder.Decode(&config); err != nil {
-		return Config{}, err
-	}
-
-	return config, nil
-}
-
-func LoadConfig() (Config, error) {
-	configPath, err := FindConfigFilePath()
-	if err != nil {
-		fmt.Printf("Error locating config file: %v\n", err)
-		return Config{}, err
-	}
-
-	return ReadConfig(configPath)
-}
 
 func main() {
 	// Create a flag set for the main command to capture global flags like -help
