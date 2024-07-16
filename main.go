@@ -28,6 +28,8 @@ func main() {
 		handleEngage(os.Args[2:])
 	case "status":
 		handleStatus(os.Args[2:])
+	case "restore":
+		handleRestore(os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printMainHelp()
@@ -55,6 +57,20 @@ func handleEngage(args []string) {
 	fmt.Println("All:", *allPtr)
 	printConfigInfo(config)
 
+}
+
+func handleRestore(args []string) {
+	restoreFlatSet := flag.NewFlagSet("engage", flag.ExitOnError)
+	destPtr := restoreFlatSet.String("dest", "", "Destination from which to restore the files. Required.")
+	localPtr := restoreFlatSet.String("local", "", "Restore to specified local directory. Defaults to overwriting the existing directories")
+
+	fmt.Println("Dest:", *destPtr)
+	fmt.Println("All:", *localPtr)
+
+	// Parse the status flag set (no specific flags for status in this example)
+	restoreFlatSet.Parse(args)
+
+	fmt.Println("Getting backup status...")
 }
 
 func handleStatus(args []string) {
@@ -86,6 +102,7 @@ func printMainHelp() {
 
 Commands:
   engage     Run the backup
+  restore	 Restore from backup
   status     Get info about backup status
 
 Use "gobackup [command] --help" for more information about a command.
