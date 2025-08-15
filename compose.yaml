@@ -1,0 +1,10 @@
+services:
+  go-backup:
+    build: .
+    image: gobackup:latest
+    container_name: go-backup
+    tty: true
+    stdin_open: true
+    environment:
+      - TZ=America/Chicago
+    stop_grace_period: 3s
