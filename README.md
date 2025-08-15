@@ -45,12 +45,12 @@ jobs: 2
 
 items:
   - name: home
-    path: /home/godzilla
+    path: /home/my-user
     dest: home
   - name: photos
-    path: /home/godzilla/Pictures
+    path: /home/my-user/Pictures
   - name: dotfiles
-    path: /home/godzilla/.config
+    path: /home/my-user/.config
     dest: config
 ```
 
