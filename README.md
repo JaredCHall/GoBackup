@@ -2,55 +2,62 @@
 
 ![logo.png](logo.png)
 
-Utility for backing up files. It moves them from one place to another.
+A small Go application that reads a YAML configuration of important directories and uses `rsync` to keep them up to date in a specified backup location.
+
+Designed to be boring, reliable, and easy to audit — no daemons, no magic sync protocols, just plain old `rsync`.
 
 ## Features
 
-- Backup and Restore files
-- Multiple backup locations
-- Support for s3 providers
-- Compression and encryption
-- Systemd configuration
+- **Simple YAML config** for sources, destinations, and `rsync` options
+- **Multiple directories** backed up under a single root
+- **Concurrent jobs** for faster operation
+- **Dry-run mode** for safe testing
+- **Verbose logging**
+- **Safety checks** to prevent destructive mistakes (e.g., syncing into `/`)
 
 ## Usage
 
 ```shell
-Usage: gobackup [command] [args]
+Usage: gobackup [flags]
 
-Commands:
-  engage     Run the backup
-  restore    Restore local from backup
-  status     Get info about backup status
+Flags:
+  --config string     Path to YAML config (default "config.yaml")
+  --dry-run           Print `rsync` actions without making changes
+  --verbose           Enable verbose logging
+  --timeout duration  Per-task timeout (default 12h)
+```
 
-Use "gobackup [command] --help" for more information about a command.
+Example:
+```shell
+./gobackup --config config.example.yaml --dry-run --verbose
 ```
 
 ## Configuration
+Example `config.example.yaml`:
+```yaml
+backup_root: /mnt/backup
 
-Here's an example for now.
+rsync:
+  options: ["-a", "--delete", "--numeric-ids"]
+  excludes: [".cache", "node_modules", ".git"]
 
-```json5
-{
-  "sourceDirs": [
-    "~/Documents",
-    "~/Photos",
-    "~/projects",
-    "~/Files"
-  ],
-  "destinations": [
-    {
-      "name": "HDD 2",
-      "path": "/run/media/user/HDD2",
-      "encrypt": true
-    },
-    {
-      "name": "cloud storage",
-      "path": "s3providers.com/mybucket",
-      "encrypt": true,
-      "username": "My_user",
-      "password": "topsecret"
-    }
-  ],
-  "log" : "none" // "none" or "syslog"
-}
+jobs: 2
+
+items:
+  - name: home
+    path: /home/godzilla
+    dest: home
+  - name: photos
+    path: /home/godzilla/Pictures
+  - name: dotfiles
+    path: /home/godzilla/.config
+    dest: config
 ```
+
+### Safety Notes
+- Always run with --dry-run after changing your config.
+- Never point backup_root at / or a mount that might disappear.
+- Consider adding --one-file-system to avoid crossing mount points.
+- Use --numeric-ids when backing up system files to preserve ownership.
+
+### License: BSD

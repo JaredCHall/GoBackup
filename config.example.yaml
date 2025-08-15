@@ -1,0 +1,14 @@
+backup_root: /mnt/backup
+rsync:
+  options: ["-a", "--delete", "--numeric-ids"]
+  excludes: [".cache", "node_modules", "Thumbs.db"]
+jobs: 2
+items:
+  - name: home
+    path: /home/captain
+    dest: home
+  - name: photos
+    path: /data/photos
+  - name: dotfiles
+    path: /home/captain/.config
+    dest: config

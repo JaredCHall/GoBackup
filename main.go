@@ -1,110 +1,194 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-func main() {
-	// Create a flag set for the main command to capture global flags like -help
-	mainFlagSet := flag.NewFlagSet("main", flag.ExitOnError)
-	helpPtr := mainFlagSet.Bool("help", false, "Display this help message")
-	shortHelpPtr := mainFlagSet.Bool("h", false, "Display this help message")
-
-	// Parse the main flag set
-	mainFlagSet.Parse(os.Args[1:])
-
-	// Check if the help flag is set
-	if *helpPtr || *shortHelpPtr || len(os.Args) < 2 {
-		printMainHelp()
-		os.Exit(0)
-		return
-	}
-
-	// Handle subcommands
-	switch os.Args[1] {
-	case "engage":
-		handleEngage(os.Args[2:])
-	case "status":
-		handleStatus(os.Args[2:])
-	case "restore":
-		handleRestore(os.Args[2:])
-	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
-		printMainHelp()
-		os.Exit(1)
-	}
+type Config struct {
+	BackupRoot string   `yaml:"backup_root"`
+	Rsync      RsyncCfg `yaml:"rsync"`
+	Jobs       int      `yaml:"jobs"`
+	Items      []Item   `yaml:"items"`
 }
 
-func handleEngage(args []string) {
-	engageFlagSet := flag.NewFlagSet("engage", flag.ExitOnError)
-	destPtr := engageFlagSet.String("dest", "", "Name a specific destination for backup")
-	allPtr := engageFlagSet.Bool("all", false, "Backup to all destinations")
+type RsyncCfg struct {
+	Options  []string `yaml:"options"`
+	Excludes []string `yaml:"excludes"`
+}
 
-	// Parse the engage flag set
-	engageFlagSet.Parse(args)
+type Item struct {
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
+	Dest string `yaml:"dest"`
+}
 
-	config, err := LoadConfig()
+func readConfig(path string) (*Config, error) {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Printf("Error reading config: %v\n", err)
-		return
+		return nil, err
+	}
+	var c Config
+	if err := yaml.Unmarshal(b, &c); err != nil {
+		return nil, err
+	}
+	if c.BackupRoot == "" {
+		return nil, errors.New("backup_root is required")
+	}
+	if len(c.Items) == 0 {
+		return nil, errors.New("items is empty")
+	}
+	if c.Jobs <= 0 {
+		c.Jobs = max(1, runtime.NumCPU()/2)
+	}
+	return &c, nil
+}
+
+func safePath(p string) (string, error) {
+	ap, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	if ap == "/" {
+		return "", fmt.Errorf("refusing to use '/' as a path: %s", p)
+	}
+	return ap, nil
+}
+
+func main() {
+	var (
+		cfgPath = flag.String("config", "config.yaml", "path to YAML config")
+		dryRun  = flag.Bool("dry-run", false, "print rsync actions without changing anything")
+		verbose = flag.Bool("verbose", false, "verbose logging")
+		timeout = flag.Duration("timeout", 12*time.Hour, "per-task timeout")
+	)
+	flag.Parse()
+
+	logger := log.New(os.Stdout, "gobackup ", log.LstdFlags)
+
+	cfg, err := readConfig(*cfgPath)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	fmt.Println("Running backup...")
-
-	fmt.Println("Dest:", *destPtr)
-	fmt.Println("All:", *allPtr)
-	printConfigInfo(config)
-
-}
-
-func handleRestore(args []string) {
-	restoreFlatSet := flag.NewFlagSet("engage", flag.ExitOnError)
-	destPtr := restoreFlatSet.String("dest", "", "Destination from which to restore the files. Required.")
-	localPtr := restoreFlatSet.String("local", "", "Restore to specified local directory. Defaults to overwriting the existing directories")
-
-	fmt.Println("Dest:", *destPtr)
-	fmt.Println("All:", *localPtr)
-
-	// Parse the status flag set (no specific flags for status in this example)
-	restoreFlatSet.Parse(args)
-
-	fmt.Println("Getting backup status...")
-}
-
-func handleStatus(args []string) {
-	statusFlagSet := flag.NewFlagSet("status", flag.ExitOnError)
-
-	// Parse the status flag set (no specific flags for status in this example)
-	statusFlagSet.Parse(args)
-
-	fmt.Println("Getting backup status...")
-}
-
-func printConfigInfo(config Config) {
-	fmt.Println("Printing config information...")
-	fmt.Println("Source Directories:")
-	for _, dir := range config.SourceDirs {
-		fmt.Println(" -", dir)
+	backupRoot, err := safePath(cfg.BackupRoot)
+	if err != nil {
+		log.Fatal(err)
 	}
-	fmt.Println("Destinations:")
-	for _, dest := range config.Destinations {
-		fmt.Printf(" - %s (%s), Encrypt: %v\n", dest.Name, dest.Path, dest.Encrypt)
-		if dest.Username != "" {
-			fmt.Printf("   Username: %s, Password: %s\n", dest.Username, dest.Password)
+
+	if _, err := exec.LookPath("rsync"); err != nil {
+		log.Fatalf("rsync not found in PATH: %v", err)
+	}
+
+	tasks := make(chan Item)
+	var wg sync.WaitGroup
+	for i := 0; i < cfg.Jobs; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for it := range tasks {
+				if err := syncItem(it, backupRoot, cfg.Rsync, *dryRun, *verbose, *timeout, logger); err != nil {
+					logger.Printf("[worker %d] %s: ERROR: %v", id, label(it), err)
+				} else {
+					logger.Printf("[worker %d] %s: OK", id, label(it))
+				}
+			}
+		}(i + 1)
+	}
+
+	for _, it := range cfg.Items {
+		tasks <- it
+	}
+	close(tasks)
+	wg.Wait()
+}
+
+func label(it Item) string {
+	name := it.Name
+	if name == "" {
+		name = filepath.Base(it.Path)
+	}
+	return name
+}
+
+func syncItem(it Item, backupRoot string, rc RsyncCfg, dry, verbose bool, timeout time.Duration, logger *log.Logger) error {
+	src, err := safePath(it.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("source missing: %w", err)
+	}
+
+	destName := it.Dest
+	if destName == "" {
+		destName = filepath.Base(src)
+	}
+	dest := filepath.Join(backupRoot, destName)
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+
+	args := []string{"-a", "--delete"}
+	if verbose {
+		args = append(args, "-v")
+	}
+	args = append(args, rc.Options...)
+	for _, ex := range rc.Excludes {
+		if strings.TrimSpace(ex) != "" {
+			args = append(args, "--exclude", ex)
 		}
 	}
+	if dry {
+		args = append(args, "--dry-run")
+	}
+
+	srcWithSlash := src
+	if !strings.HasSuffix(srcWithSlash, string(os.PathSeparator)) {
+		srcWithSlash += string(os.PathSeparator)
+	}
+	args = append(args, srcWithSlash, dest+string(os.PathSeparator))
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "rsync", args...)
+	cmd.Stdout = logger.Writer()
+	cmd.Stderr = logger.Writer()
+
+	if verbose || dry {
+		logger.Printf("rsync %s", shellEscape(args))
+	}
+	return cmd.Run()
 }
 
-func printMainHelp() {
-	fmt.Printf(`Usage: gobackup [command] [args]
+func shellEscape(args []string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		if strings.ContainsAny(a, " \"'\t\n$") {
+			q[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+		} else {
+			q[i] = a
+		}
+	}
+	return strings.Join(q, " ")
+}
 
-Commands:
-  engage     Run the backup
-  restore	 Restore from backup
-  status     Get info about backup status
-
-Use "gobackup [command] --help" for more information about a command.
-`)
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
