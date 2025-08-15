@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/goccy/go-yaml"
 )
 
 type Config struct {
@@ -53,7 +53,29 @@ func readConfig(path string) (*Config, error) {
 	if c.Jobs <= 0 {
 		c.Jobs = max(1, runtime.NumCPU()/2)
 	}
+	// Normalize rsync excludes once: trim whitespace, drop empties, deduplicate.
+	c.Rsync.Excludes = uniqTrimmed(c.Rsync.Excludes)
+
 	return &c, nil
+}
+
+// uniqTrimmed returns a copy of ss with whitespace-trimmed entries,
+// all empty strings removed, and duplicates eliminated while preserving order.
+func uniqTrimmed(ss []string) []string {
+	seen := make(map[string]struct{}, len(ss))
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func safePath(p string) (string, error) {
@@ -147,9 +169,8 @@ func syncItem(it Item, backupRoot string, rc RsyncCfg, dry, verbose bool, timeou
 	}
 	args = append(args, rc.Options...)
 	for _, ex := range rc.Excludes {
-		if strings.TrimSpace(ex) != "" {
-			args = append(args, "--exclude", ex)
-		}
+		// already trimmed & deduplicated in readConfig
+		args = append(args, "--exclude", ex)
 	}
 	if dry {
 		args = append(args, "--dry-run")
@@ -184,11 +205,4 @@ func shellEscape(args []string) string {
 		}
 	}
 	return strings.Join(q, " ")
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
