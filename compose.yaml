@@ -3,6 +3,7 @@ services:
     build: .
     image: gobackup:latest
     container_name: go-backup
+    hostname: go-backup
     tty: true
     stdin_open: true
     environment:
